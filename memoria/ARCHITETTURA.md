@@ -1,70 +1,318 @@
-# Memoria dell'agente architetto
+# Memoria ALE — Architettura della fabbrica agentica
 
-## Obiettivo
-Architettura distribuita e compartimentata: la compromissione di un nodo esposto non deve concedere automaticamente accesso ai nodi successivi, al backend o al database.
+> Stato: decisioni consolidate dalle prime 10 domande architetturali.
+> Questo documento descrive principi e struttura. Non deve contenere password, token o chiavi private.
 
-## Modello iniziale
+## 1. Obiettivo
+ALE e una fabbrica agentica capace di ricevere dal cliente richieste per siti e gestionali, interpretarle, riutilizzare componenti verificati e creare dinamicamente lo sciame di specialisti necessario.
+
+Principio: **sciame dinamico, comando centralizzato e confini decentralizzati.**
+
+## 2. Percorso della richiesta
 
 ```text
-Internet / client
-      |
-      v
-PC1 - Edge / Apache2
-      |
-      v
-PC2 - Relay / Broker
-      |
-      v
-Rete privata Yggdrasil
-      |
-      v
-Backend / server centrale / DB
+CLIENTE
+  |
+  v
+ALEX
+Apache2 + SOLO sito statico Servicess
+  |
+  v
+ZINGA
+FastAPI Relay / Broker
+  |
+  v
+AAA
+DB + Python SOLO di Servicess
+validazione della richiesta
+  |
+  v
+ALE
+orchestratore + fabbrica clienti
 ```
 
-## Principi emersi
+Il cliente entra sempre dal sito Servicess su ALEX. ALE non e il punto di ingresso pubblico diretto del cliente.
 
-### Compartimentazione
-PC1 espone Apache2, ma non contiene il database e non deve esporre direttamente i servizi/sorgenti Python del backend. Ogni nodo conosce solo quanto necessario per comunicare con il livello successivo.
+### ALEX
+- Apache2.
+- Solo frontend/sito statico Servicess.
+- Nessuna logica Python, database o orchestrazione agenti.
 
-### Identita differenti
-PC1 e PC2 utilizzano identita e credenziali differenti. La compromissione di PC1 non deve fornire automaticamente l'identita necessaria per impersonare il relay verso i livelli successivi.
+### ZINGA
+- Relay/Broker FastAPI.
+- Autentica il passaggio in ingresso.
+- Traduce/separa le credenziali tra hop.
+- Non e un semplice relay cieco.
 
-### Difesa a strati
-Una chiave da sola non equivale ad accesso. L'autorizzazione deriva dalla combinazione di percorso di rete, nftables, identita del nodo, credenziale valida e autorizzazione applicativa.
+### AAA
+- Database di Servicess.
+- Python di Servicess.
+- Riceve le richieste provenienti dal percorso autorizzato e le valida prima dell'inoltro verso ALE.
+- L'input cliente rimane dato: non deve diventare arbitrariamente shell, SQL o codice eseguibile.
+- Usa formati/schema consentiti e separazione tra dati e comandi.
+- Input non ammessi vengono rifiutati e possono attivare la procedura di sicurezza prevista.
 
-### Yggdrasil
-I servizi interni sono separati dalla superficie Internet e raggiungibili attraverso la rete privata Yggdrasil secondo policy esplicite.
+### ALE
+- Server grande della fabbrica.
+- Ospita orchestrazione, core verificato e domini dei clienti.
+- Ospita Apache/configurazioni, applicazioni e database dei clienti secondo isolamento definito sotto.
 
-### nftables allowlist
-Default deny sui servizi interni. Sono ammessi esclusivamente i flussi previsti dall'architettura e provenienti dai nodi/reti autorizzati.
+## 3. Orchestratore ALE
+Ogni richiesta entra da un solo punto decisionale: **l'Agente Orchestratore**.
 
-### Rotazione delle chiavi
-Le chiavi operative vengono ruotate automaticamente ogni giorno. La rotazione limita la vita utile di una credenziale sottratta, ma non sostituisce revoca e isolamento.
+```text
+richiesta validata
+       |
+       v
+ORCHESTRATORE
+       |
+       +-- carica memoria ALE
+       +-- legge stato reale
+       +-- interpreta requisiti
+       +-- cerca moduli esistenti
+       +-- prepara piano
+       +-- stabilisce dipendenze
+       +-- decide gli specialisti
+       |
+       +--------+--------+
+       v        v        v
+   Frontend   Backend   Database
+      Agent     Agent      Agent
+       +--------+--------+
+                v
+          Test / Security
+                |
+                v
+              Deploy
+```
 
-### Falco
-Falco opera su PC1 e PC2 come sensore runtime per individuare comportamenti non previsti dall'architettura, processi anomali, shell inattese e accessi sospetti.
+Gli specialisti non si auto-attivano. L'orchestratore crea/delega job e stabilisce ordine e dipendenze.
 
-### Canary e deception
-PC1 e PC2 contengono sensori/esche. Porte che non appartengono a flussi legittimi possono generare eventi di sicurezza e attivare Fail2ban/nftables. Le esche sono un ulteriore sensore e non devono essere considerate infallibili.
+Ogni agente lavora esclusivamente nel proprio dominio di responsabilita e privilegi e comunica tramite le interfacce previste.
 
-### Fail-closed
-Quando viene rilevata una compromissione credibile, il sistema deve poter revocare le comunicazioni e isolare i nodi interessati. Un nodo precedentemente autorizzato non rimane automaticamente affidabile.
+## 4. Architetto temporaneo
+Se una richiesta richiede una capacita assente o una modifica delle fondamenta, l'orchestratore **non improvvisa**.
 
-### Telegram
-Telegram Bot serve per avvisare l'operatore. Il contenimento automatico non deve dipendere dalla disponibilita di Telegram o dall'intervento umano.
+```text
+ORCHESTRATORE
+     |
+funzione/capacita non conosciuta
+     |
+     v
+ARCHITETTO TEMPORANEO
+     |
+     +-- progetta modulo/struttura
+     +-- definisce confini di privilegio
+     +-- assegna specialisti
+     +-- sviluppo
+     +-- test
+     +-- security audit
+     +-- GitHub / Architecture Memory
+     |
+     v
+terminazione Architetto temporaneo
+```
 
-### Nodo compromesso
-Se un attaccante ottiene root su un nodo, assumiamo che possa osservare o manipolare cio che quel nodo possiede su disco e RAM. I livelli successivi devono quindi mantenere una propria barriera di fiducia indipendente.
+**Legge:** l'orchestratore puo scegliere come utilizzare l'infrastruttura, ma non puo cambiare autonomamente le leggi dell'infrastruttura.
 
-## Regola dell'agente architetto
+In forma sintetica: **l'orchestratore amministra cio che ALE possiede; l'Architetto modifica cio che ALE e.**
 
-> Non chiedere soltanto se una chiave e sicura. Chiedere: se questo nodo viene completamente compromesso, quale altro nodo puo raggiungere, con quale identita e con quali privilegi?
+## 5. Memoria obbligatoria prima di pianificare
+Prima di interpretare la richiesta cliente, l'orchestratore deve conoscere:
 
-## Questioni aperte
-- Attestazione dell'identita PC1 -> PC2 senza dipendere soltanto da un segreto copiabile.
-- Distribuzione e revoca automatica delle credenziali.
-- Autorita del controller che ordina l'isolamento.
-- Protezione da falsi eventi usati per isolare arbitrariamente altri nodi.
-- Continuita del servizio quando PC1/PC2 vengono messi in quarantena.
-- Eventuali nodi puliti di standby e failover.
-- Protocollo FastAPI tra relay e insieme rigoroso dei messaggi consentiti.
+1. Topologia: nodi, ruoli, gateway/broker e collegamenti Yggdrasil.
+2. Leggi ALE: separazione privilegi, servizi non pubblicabili, flussi consentiti, una responsabilita per agente.
+3. Capacita: CPU, RAM, storage e runtime disponibili sui nodi.
+4. Catalogo moduli verificati: login, booking, clienti, camere, Telegram OTP, pagamenti, backup, Cloudflare, Apache, database e futuri moduli.
+5. Catalogo agenti: competenze, strumenti, nodo consentito e privilegi.
+6. Mappa permessi: filesystem, utenti/gruppi Linux, sudo autorizzato, API e servizi raggiungibili/non raggiungibili.
+7. Rete e sicurezza: identita/riferimenti Yggdrasil, API interne, policy nftables, autenticazione servizi, Cloudflare Tunnel, Fail2ban. La memoria conserva riferimenti ai secret, non i secret.
+8. Stato reale: nodi e servizi attivi, job, capacita occupata, problemi conosciuti.
+9. Standard progetto: directory, API, DB, logging, test, naming, GitHub, deploy, rollback e documentazione.
+10. Decisioni precedenti: soluzioni, errori e motivazioni architetturali.
+11. Vincoli commerciali: servizi acquistati, risorse incluse, extra e limiti contrattuali.
+12. Escalation: quando deve essere creato un job per l'Architetto temporaneo.
+
+Sequenza:
+
+```text
+CARICA MEMORIA ALE
+       |
+LEGGI STATO REALE
+       |
+LEGGI MODULI + AGENTI
+       |
+APPLICA VINCOLI SICUREZZA
+       |
+ANALIZZA RICHIESTA
+       |
+ESISTE GIA TUTTO?
+   |           |
+  SI          NO
+   |           |
+workflow    ARCHITETTO
+   |        TEMPORANEO
+   +-----+-----+
+         v
+    CREA SCIAME
+```
+
+## 6. Struttura piattaforma e clienti
+
+```text
+ALE/
+├── core/                    # SOLO piattaforma ALE
+│   ├── modules/
+│   ├── templates/
+│   ├── agents/
+│   └── libraries/
+│
+└── clienti/
+    ├── hotel-roma/
+    │   ├── frontend/
+    │   ├── gestionale/
+    │   ├── backend/
+    │   ├── config/
+    │   ├── migrations/
+    │   ├── logs/
+    │   ├── tests/
+    │   └── progetto.yaml
+    └── hotel-milano/
+        └── ...
+```
+
+Ogni cliente costituisce un dominio isolato. Non viene duplicata inutilmente l'intera piattaforma ALE.
+
+## 7. Isolamento per cliente
+Ogni cliente possiede almeno:
+- utente Linux dedicato;
+- directory dedicate;
+- applicazione/configurazione dedicate;
+- database e ruolo PostgreSQL dedicati;
+- credenziali dedicate;
+- log e backup separati;
+- dominio/tunnel/configurazione separati;
+- processi applicativi e permessi separati.
+
+Esempio:
+
+```text
+/clienti/hotel-roma/    -> ale_hotel_roma
+/clienti/hotel-milano/  -> ale_hotel_milano
+
+PostgreSQL condiviso come motore:
+  cliente_hotel_roma    -> hotel_roma_app
+  cliente_hotel_milano  -> hotel_milano_app
+```
+
+Lo stesso motore PostgreSQL puo essere condiviso, ma non dati, identita e autorizzazioni. Anche Apache2 e Cloudflare possono essere infrastrutture comuni con VirtualHost/tunnel/configurazioni separati.
+
+### Condiviso
+- motore PostgreSQL;
+- Apache2;
+- Yggdrasil;
+- sistema agenti;
+- template;
+- moduli verificati;
+- librerie;
+- orchestratore.
+
+### Isolato
+- identita Linux;
+- filesystem;
+- applicazione;
+- configurazione;
+- database/ruolo;
+- credenziali;
+- log;
+- backup;
+- dominio/tunnel;
+- processi;
+- permessi.
+
+**Legge:** **condividere le capacita, mai la fiducia. Ogni cliente possiede un proprio dominio di dati, identita, filesystem e privilegi.**
+
+Gli agenti sono lavoratori temporanei, non proprietari permanenti del cliente. Durante un job ricevono esclusivamente il contesto/privilegio del cliente interessato. Terminato il job, il privilegio temporaneo termina.
+
+## 8. progetto.yaml
+`progetto.yaml` e la carta d'identita/version manifest del progetto. Esempio concettuale:
+
+```yaml
+cliente: hotel-roma
+tipo: hotel
+
+modules:
+  booking:
+    version: "1.1.0"
+    commit: "a84f..."
+    checksum: "sha256:..."
+  login:
+    version: "2.3.1"
+  telegram_otp:
+    version: "1.4.0"
+
+runtime:
+  frontend: apache
+  backend: fastapi
+  database: postgresql
+
+isolation:
+  linux_user: ale_hotel_roma
+  database: cliente_hotel_roma
+
+network:
+  public: cloudflare
+  internal: yggdrasil
+```
+
+## 9. CORE versionato e release cliente bloccate
+I moduli CORE sono immutabili/versionati:
+
+```text
+/core/modules/booking/
+├── 1.0.0/
+├── 1.1.0/
+└── 2.0.0/
+```
+
+Ogni progetto fissa precisamente le versioni approvate. Dove applicabile conserva anche commit e checksum.
+
+Il runtime cliente **non dipende da un alias modificabile come `current/`**. La build/release del cliente contiene o risolve in modo immutabile le dipendenze precise approvate.
+
+**Legge:** **il CORE fornisce componenti versionati. Ogni cliente fissa le proprie versioni. Nessun aggiornamento del CORE modifica automaticamente un progetto gia distribuito.**
+
+## 10. Aggiornamento moduli cliente
+Una nuova release CORE non aggiorna automaticamente la produzione.
+
+```text
+nuova versione CORE
+       |
+compatibility agent
+       |
+test progetto cliente
+       |
+migration se necessaria
+       |
+security test
+       |
+approvazione / deploy
+       |
+progetto.yaml aggiornato
+```
+
+Una funzione sviluppata inizialmente per un cliente non diventa automaticamente CORE. Se generalizzabile, viene ripulita, resa generica, testata e sottoposta ad audit prima di essere promossa a nuova release CORE disponibile per altri progetti.
+
+## Principi di sicurezza gia stabiliti
+- Defense in depth e default deny per i servizi interni.
+- Yggdrasil separa la rete interna dalla superficie Internet secondo policy esplicite.
+- nftables consente solo i flussi previsti.
+- Identita/credenziali differenti tra hop.
+- Rotazione credenziali, revoca e isolamento sono controlli distinti.
+- Falco e deception/canary possono rilevare comportamenti anomali.
+- Fail-closed: un nodo compromesso non resta automaticamente affidabile.
+- Telegram e un canale di allerta, non il controllo di sicurezza da cui dipende il contenimento.
+- Se un nodo ottiene compromissione root, si assume compromesso cio che quel nodo puo leggere/manipolare; i livelli successivi mantengono barriere indipendenti.
+
+## Domanda successiva aperta
+**Q11 — Chi puo scrivere/promuovere contenuto nel CORE?**
+Va definita l'autorita che possiede il diritto di promuovere un modulo candidato nel CORE dopo staging, test e security audit.
