@@ -1,6 +1,6 @@
 # Memoria ALE — Architettura della fabbrica agentica
 
-> Stato: decisioni consolidate dalle prime 10 domande architetturali.
+> Stato: decisioni consolidate dalle prime 11 domande architetturali.
 > Questo documento descrive principi e struttura. Non deve contenere password, token o chiavi private.
 
 ## 1. Obiettivo
@@ -302,6 +302,118 @@ progetto.yaml aggiornato
 
 Una funzione sviluppata inizialmente per un cliente non diventa automaticamente CORE. Se generalizzabile, viene ripulita, resa generica, testata e sottoposta ad audit prima di essere promossa a nuova release CORE disponibile per altri progetti.
 
+## 11. CORE Gatekeeper — il caveau ALE
+Nessun agente di progetto puo scrivere direttamente nel CORE. Il CORE e il caveau della piattaforma.
+
+```text
+AGENTI HOTEL-ROMA
+        |
+        | sviluppano
+        v
+/staging/core-candidates/
+        |
+        v
+AGENTE TEST
+        |
+        v
+AGENTE SECURITY
+        |
+        v
+AGENTE CORE-GATEKEEPER
+        |
+        | promozione controllata
+        v
+/core/modules/
+```
+
+### Autorita
+
+```text
+orchestratore     -> READ CORE
+agenti progetto   -> READ CORE
+architetto        -> READ CORE + WRITE STAGING
+security agent    -> READ + AUDIT
+core-gatekeeper   -> WRITE CORE
+```
+
+Nemmeno l'Orchestratore principale puo scrivere direttamente in `/core`.
+
+A livello Linux il confine deve essere reale e non soltanto un'istruzione data all'AI:
+
+```text
+/core/
+owner: ale-core
+write: SOLO core-gatekeeper
+
+/staging/
+write: agenti autorizzati
+
+/clienti/hotel-roma/
+write: sciame hotel-roma
+```
+
+### Gatekeeper deterministico
+Il CORE Gatekeeper non e un agente di sviluppo e non deve programmare. Possiede un insieme minimo di operazioni di promozione:
+
+```text
+riceve candidate
+      |
+verifica test
+      |
+verifica security audit
+      |
+verifica manifest/checksum
+      |
+assegna versione
+      |
+promuove
+      |
+Git commit/tag
+      |
+CORE
+```
+
+Esempio:
+
+```text
+hotel-roma sviluppa
+      |
+staging/booking-calendar
+      |
+test
+      |
+audit
+      |
+APPROVATO
+      |
+core/modules/booking-calendar/1.0.0
+```
+
+Solo dopo la promozione il modulo diventa patrimonio riutilizzabile di ALE.
+
+### Least privilege del Gatekeeper
+Il Gatekeeper non deve possedere un normale `sudo ALL`. Deve avere esclusivamente le operazioni necessarie alla promozione nel CORE. L'identita di amministrazione/bootstrap della macchina resta separata dal Gatekeeper e dallo sciame ordinario.
+
+### Livelli di autorita
+
+```text
+LIVELLO 1   Agenti progetto
+            lavorano nel recinto cliente
+
+LIVELLO 2   Orchestratore / Architetto
+            progettano e delegano
+
+LIVELLO 3   CORE Gatekeeper
+            custodisce e promuove il CORE
+
+SOPRA       Amministrazione / bootstrap macchina
+            identita separata dallo sciame ordinario
+```
+
+**Legge ALE #11:** **Nessun progetto modifica il CORE. Un progetto puo proporre conoscenza; soltanto il Gatekeeper puo promuoverla nel CORE dopo verifica.**
+
+Questo impedisce a un agente compromesso nel recinto di un cliente di avvelenare direttamente componenti condivisi che potrebbero essere distribuiti successivamente ad altri clienti.
+
 ## Principi di sicurezza gia stabiliti
 - Defense in depth e default deny per i servizi interni.
 - Yggdrasil separa la rete interna dalla superficie Internet secondo policy esplicite.
@@ -313,6 +425,5 @@ Una funzione sviluppata inizialmente per un cliente non diventa automaticamente 
 - Telegram e un canale di allerta, non il controllo di sicurezza da cui dipende il contenimento.
 - Se un nodo ottiene compromissione root, si assume compromesso cio che quel nodo puo leggere/manipolare; i livelli successivi mantengono barriere indipendenti.
 
-## Domanda successiva aperta
-**Q11 — Chi puo scrivere/promuovere contenuto nel CORE?**
-Va definita l'autorita che possiede il diritto di promuovere un modulo candidato nel CORE dopo staging, test e security audit.
+## Prossimo punto da definire
+La prossima decisione architetturale deve partire da Q12, mantenendo le prime 11 decisioni come leggi consolidate salvo revisione esplicita.
