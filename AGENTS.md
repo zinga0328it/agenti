@@ -166,6 +166,37 @@ Il Capo Architetto non è un semplice agente esecutore. Deve comprendere
 l'obiettivo generale, osservare lo stato dell'intero sistema e coordinare lo
 sciame usando il ragionamento dell'architetto.
 
+### Input infrastrutturali del Capo Architetto
+
+Prima di costruire il piano, il Capo Architetto deve leggere lo stato reale
+dell'infrastruttura e usare almeno questi input:
+
+- **Yggdrasil** → rete mesh privata interna primaria tra **ALE, AAA, ZINGA, ALEX**
+  e gli altri nodi dello sciame.
+- **Tor** → livello di privacy per i flussi esterni previsti dall'architettura;
+  non sostituisce la mesh interna Yggdrasil.
+- **MCP** → elenco dei nodi raggiungibili, tool disponibili e capacità offerte
+  da ogni agente.
+- **Stato nodi** → CPU, GPU, RAM, storage, carico, uptime e raggiungibilità.
+- **Stato sicurezza** → nftables, Fail2Ban, Falco, `ollama-guard` e relativi
+  allarmi.
+- **Topologia corrente** → quali nodi sono vivi, quali collegamenti funzionano
+  e quali percorsi alternativi sono disponibili.
+- **Memoria architetturale** → errori precedenti, workaround riusciti,
+  decisioni già prese e strategie già validate.
+- **Coda dei lavori** → task attivi, falliti, sospesi, replicati o in attesa
+  di risorse.
+- **Capacità disponibili** → servizi locali, VM, storage, modelli LLM e risorse
+  esterne già previste dall'architettura.
+
+Il Capo Architetto non deve assumere che il percorso precedente esista ancora.
+Ogni ciclo decisionale deve partire da:
+
+> **OBIETTIVO + STATO DELLA MESH YGGDRASIL + STATO DEI NODI + TOOL MCP
+> DISPONIBILI + STATO SICUREZZA + MEMORIA + RISORSE DISPONIBILI**
+
+e da questi input costruire dinamicamente il piano dello sciame.
+
 Il Capo Architetto deve:
 
 - usare **analogia, intuito, contesto e memoria delle soluzioni precedenti**;
