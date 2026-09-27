@@ -1,0 +1,38 @@
+[Unit]
+Description=MCP ALE - server read-only (node/ollama/gpu status) su Yggdrasil
+# Deve partire dopo rete, Yggdrasil (per avere ygg0 su) e driver NVIDIA
+# (per gpu_status via nvidia-smi) e dopo Ollama (per ollama_status). Solo
+# After=, mai Requires=/BindsTo=: il servizio MCP non deve dipendere dalla
+# salute di Ollama per avviarsi, deve solo poterla osservare quando è su.
+After=network-online.target yggdrasil.service nvidia-persistenced.service ollama.service
+Wants=network-online.target yggdrasil.service
+
+[Service]
+Type=simple
+User=mcp-ale
+Group=mcp-ale
+WorkingDirectory=/home/ale/agenti/mcp-ale
+
+# Il wrapper attende ygg0, risolve il SUO indirizzo IPv6 reale a runtime e
+# lo passa al server via MCP_HOST/MCP_ALLOWED_HOST: mai 0.0.0.0/::/eth0,
+# mai un indirizzo hardcoded qui nella unit.
+ExecStart=/home/ale/agenti/mcp-ale/scripts/start-mcp-ale.sh
+
+Restart=always
+RestartSec=3
+
+# Nessun privilegio elevato necessario: l'utente dedicato mcp-ale legge solo
+# /proc, chiama nvidia-smi (eseguibile da chiunque) e fa una richiesta HTTP
+# locale a Ollama. Nessun sudo/pkexec/Polkit nel codice (vedi core/mcp).
+# NB: ProtectHome/ProtectSystem strict non sono compatibili con il fatto che
+# il codice del servizio vive sotto /home/ale/agenti (stessa scelta già
+# adottata da ollama-guard.service, che per lo stesso motivo non li usa).
+NoNewPrivileges=true
+PrivateTmp=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mcp-ale
+
+[Install]
+WantedBy=multi-user.target

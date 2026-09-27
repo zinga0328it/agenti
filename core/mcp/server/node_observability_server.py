@@ -22,6 +22,7 @@ vecchi esempi FastMCP v1.
 
 from __future__ import annotations
 
+import logging
 import os
 import socket
 import subprocess
@@ -29,6 +30,19 @@ from dataclasses import dataclass
 
 import httpx2
 from mcp.server.mcpserver import MCPServer
+
+# Logger dedicato agli eventi di sicurezza HTTP (richieste rifiutate/malformate).
+# Scrive su stdout -> journald (SyslogIdentifier=mcp-ale, vedi unit systemd),
+# con un prefisso fisso e un IP tra parentesi quadre se IPv6: stesso stile
+# già usato per l'honeypot (log prefix "HONEYPOT-7070 ... SRC=<HOST>") così
+# Fail2Ban può riusare lo stesso pattern collaudato senza ambiguità sugli
+# indirizzi IPv6 (che altrimenti, non tra parentesi, si confonderebbero con
+# la porta nel log di accesso grezzo di uvicorn).
+security_logger = logging.getLogger("mcp_ale.security")
+
+
+def _bracket_if_ipv6(host: str) -> str:
+    return f"[{host}]" if ":" in host else host
 
 # URL fisso, solo loopback: coerente con ollama-guard (core/safety/ollama-guard),
 # non deve mai dipendere da un endpoint raggiungibile dall'esterno.
@@ -200,8 +214,90 @@ def gpu_status() -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Configurazione runtime (produzione: SOLO Yggdrasil, mai localhost fisso)
+# ---------------------------------------------------------------------------
+# In produzione il servizio DEVE ascoltare solo sull'indirizzo IPv6 reale di
+# ygg0 (mai 0.0.0.0/::/eth0/wlan): l'indirizzo viene passato esplicitamente
+# via variabile d'ambiente MCP_HOST dal wrapper di avvio (vedi
+# infra/systemd/mcp-ale.service e scripts/mcp-ale-ygg0-host.sh), NON
+# hardcoded qui. Il default "127.0.0.1" resta solo per i test locali
+# manuali (client/test_client.py, pytest).
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8811
+
+
+def _security_middleware(app):
+    """Middleware ASGI minimale: logga (senza mai modificare la risposta) gli
+    esiti HTTP >=400 in un formato fisso, non ambiguo per IPv4/IPv6, così che
+    Fail2Ban possa individuare richieste rifiutate/malformate/ripetute senza
+    alcuna shell o parsing arbitrario lato server (vedi
+    infra/fail2ban/filter.d/mcp-ale.conf)."""
+
+    async def wrapped(scope, receive, send):
+        if scope["type"] != "http":
+            await app(scope, receive, send)
+            return
+
+        status_holder: dict[str, int] = {}
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                status_holder["status"] = message["status"]
+            await send(message)
+
+        await app(scope, receive, send_wrapper)
+
+        status = status_holder.get("status", 0)
+        if status >= 400:
+            client = scope.get("client")
+            host = _bracket_if_ipv6(client[0]) if client else "unknown"
+            path = scope.get("path", "?")
+            security_logger.warning(
+                "MCP-ALE-REJECT SRC=%s STATUS=%s PATH=%s", host, status, path
+            )
+
+    return wrapped
+
+
 if __name__ == "__main__":
-    # Streamable HTTP, solo su localhost per il primo test (vedi README.md).
-    # Porta scelta per non collidere con altri servizi già in ascolto sulla
-    # macchina; documentata anche nel client di test.
-    mcp.run(transport="streamable-http", host="127.0.0.1", port=8811)
+    # Host/porta configurabili via ambiente, MAI hardcoded per la produzione:
+    # fail-closed by default (localhost) se la variabile non è impostata.
+    host = os.environ.get("MCP_HOST", DEFAULT_HOST)
+    port = int(os.environ.get("MCP_PORT", str(DEFAULT_PORT)))
+
+    # Protezione DNS-rebinding: se MCP_ALLOWED_HOST è impostata (produzione),
+    # accetta solo richieste con quell'header Host esatto (es.
+    # "[200:...]:8811"); in locale (default non impostato) resta disabilitata
+    # per non rompere i test manuali su 127.0.0.1.
+    allowed_host = os.environ.get("MCP_ALLOWED_HOST")
+    transport_security = None
+    if allowed_host:
+        from mcp.server.transport_security import TransportSecuritySettings
+
+        transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=[allowed_host],
+            allowed_origins=[],
+        )
+
+    # Avvolge l'app Starlette generata dall'SDK con il logging di sicurezza
+    # (best-effort: se l'SDK cambia firma interna, il server deve comunque
+    # avviarsi senza il middleware piuttosto che non avviarsi affatto).
+    try:
+        _orig_streamable_http_app = mcp.streamable_http_app
+
+        def _patched_streamable_http_app(*args, **kwargs):
+            app = _orig_streamable_http_app(*args, **kwargs)
+            return _security_middleware(app)
+
+        mcp.streamable_http_app = _patched_streamable_http_app
+    except AttributeError:  # pragma: no cover
+        pass
+
+    mcp.run(
+        transport="streamable-http",
+        host=host,
+        port=port,
+        transport_security=transport_security,
+    )

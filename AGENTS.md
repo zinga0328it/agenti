@@ -51,14 +51,18 @@ docs/<nome>
 core/
   safety/
     ollama-guard/       # sorgente del watchdog Ollama (Rust), copia versionata
+  mcp/                  # server/client MCP (Python, SDK ufficiale v2), read-only
 
 infra/
   apache2/               # configurazioni Apache2 versionate (vhost, template)
-  nftables/              # regole nftables versionate (template)
-  systemd/               # unit file systemd versionate (template)
+  nftables/              # regole nftables versionate (template, incl. mcp.conf)
+  systemd/               # unit file systemd versionate (template, incl. mcp-ale.service)
   cloudflared/           # configurazione Cloudflare Tunnel versionata (senza token/credenziali)
+  fail2ban/              # filter.d/jail.d/action.d versionati (template, incl. mcp-ale)
+  falco/                 # regole custom Falco versionate (template, incl. mcp-ale-security.yaml)
 
 scripts/                 # script di deploy/backup/rollback controllati
+  mcp-ale/               # script di avvio/risoluzione IPv6 usati dalla unit mcp-ale.service
 memoria/                 # memoria architetturale e decisionale (vedi ARCHITETTURA.md)
 ```
 
@@ -79,7 +83,17 @@ competenza. Esempio:
 - agente nftables → `infra/nftables/`
 - agente ollama-guard → `core/safety/ollama-guard/`
 - agente Cloudflare → `infra/cloudflared/`
-- agente MCP → (area dedicata, non ancora attivata)
+- agente MCP (server/client) → `core/mcp/`
+- agente MCP (firewall/hardening) → `infra/nftables/mcp.conf`,
+  `infra/fail2ban/` (jail `mcp-ale`), `infra/falco/rules.d/mcp-ale-security.yaml`,
+  `infra/systemd/mcp-ale.service`, `scripts/mcp-ale/`
+
+Il servizio MCP (`mcp-ale`) è raggiungibile SOLO tramite l'interfaccia
+Yggdrasil (`ygg0`), mai da LAN/Internet: qualsiasi modifica che allarghi
+l'esposizione di rete richiede lo stesso protocollo backup→validazione→
+test→rollback descritto al punto 5, applicato con la massima cautela
+perché tocca `chain input` del firewall condiviso con tutti gli altri
+servizi.
 
 Un agente non deve modificare file al di fuori della propria area senza una
 ragione esplicita e documentata nel messaggio di commit.

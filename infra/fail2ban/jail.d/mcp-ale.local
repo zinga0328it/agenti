@@ -1,0 +1,21 @@
+# Jail dedicata al servizio MCP ALE (core/mcp), NON modifica le jail esistenti.
+#
+# NB: l'azione di default "nftables-multiport" (usata dalle jail preesistenti
+# di questa macchina) e' risultata NON funzionante in un test reale (vedi
+# commento in action.d/mcp-ale-nftables.conf): crea una tabella dinamica
+# scollegata dai set statici realmente wired nel firewall. Per la jail
+# mcp-ale usiamo quindi un'azione dedicata "mcp-ale-nftables" che opera sul
+# set statico f2b-mcp-ale (stesso *sistema* nftables/set-based delle jail
+# esistenti, stile identico a banned.conf, solo con azione realmente
+# funzionante).
+[mcp-ale]
+enabled = true
+filter = mcp-ale
+backend = systemd
+journalmatch = _SYSTEMD_UNIT=mcp-ale.service
+port = 8811
+protocol = tcp
+banaction = mcp-ale-nftables
+maxretry = 5
+findtime = 5m
+bantime = 1h

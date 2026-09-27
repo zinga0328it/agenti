@@ -1,0 +1,110 @@
+# Regole Falco dedicate a MCP ALE (core/mcp), ollama-guard e Ollama.
+# Caricate automaticamente da /etc/falco/rules.d (vedi rules_files in
+# falco.yaml, gia' configurato per caricare quella directory).
+#
+# Per ora SOLO allerta (priority Warning/Critical, nessuna azione di kill
+# automatico): come richiesto, Falco osserva e segnala, non interviene.
+#
+# Processi identificati con precisione tramite proc.pcmdline (riga di
+# comando del PROCESSO GENITORE), non solo il nome, perche' l'interprete
+# Python e' condiviso da molti processi sulla macchina: matchare solo
+# "python3.12" darebbe troppi falsi positivi.
+
+- list: mcp_ale_expected_children
+  items: [nvidia-smi]
+
+- macro: mcp_ale_process
+  condition: (proc.pcmdline contains "node_observability_server.py")
+
+- macro: ollama_guard_process
+  condition: (proc.pcmdline contains "/ollama-guard/target/release/ollama-guard" or proc.name=ollama-guard)
+
+- macro: ollama_process
+  condition: (proc.pcmdline startswith "/usr/local/bin/ollama serve" or proc.pname=ollama)
+
+- rule: Unexpected shell spawned by MCP ALE server
+  desc: >
+    Il server MCP ALE (core/mcp) e' un servizio read-only che non deve MAI
+    generare una shell interattiva. Se accade, e' un segnale forte di
+    compromissione (es. RCE nella libreria MCP o nelle sue dipendenze).
+  condition: spawned_process and shell_procs and mcp_ale_process
+  output: >
+    Shell inattesa generata dal processo MCP ALE (user=%user.name shell=%proc.name
+    parent_cmdline=%proc.pcmdline command=%proc.cmdline pid=%proc.pid ppid=%proc.ppid)
+  priority: CRITICAL
+  tags: [mcp-ale, process, shell]
+
+- rule: Unexpected program executed by MCP ALE server
+  desc: >
+    Il server MCP ALE puo' legittimamente eseguire SOLO nvidia-smi (per
+    gpu_status, con argomenti fissi, vedi core/mcp/server/node_observability_server.py).
+    Qualsiasi altro programma eseguito come figlio del processo MCP ALE e'
+    inatteso e va segnalato. Esclude esplicitamente il passaggio interno di
+    "posix_spawn"/subprocess di Python (un evento execve transitorio in cui
+    il "figlio" ha ancora la stessa cmdline del padre, con
+    node_observability_server.py negli argomenti: verificato con un test
+    reale il 2026-09-27, non e' un programma diverso ma un dettaglio
+    implementativo del modulo subprocess prima dell'exec effettivo del
+    comando target. Il DSL di Falco non supporta confronti campo=campo,
+    quindi l'esclusione e' espressa via proc.cmdline contains, non via
+    proc.cmdline=proc.pcmdline).
+  condition: >
+    spawned_process and mcp_ale_process
+    and not proc.name in (mcp_ale_expected_children)
+    and not proc.cmdline contains "node_observability_server.py"
+  output: >
+    Esecuzione di programma non previsto dal processo MCP ALE (program=%proc.name
+    parent_cmdline=%proc.pcmdline command=%proc.cmdline user=%user.name pid=%proc.pid)
+  priority: WARNING
+  tags: [mcp-ale, process, execution]
+
+- rule: Unexpected child process from ollama-guard or ollama
+  desc: >
+    ollama-guard esegue SOLO comandi amministrativi fissi codificati a
+    compile-time (systemctl, nvidia-smi, pgrep/kill in casi ben definiti,
+    vedi core/safety/ollama-guard/src/process.rs). Ollama stesso non deve
+    generare shell o strumenti di rete come figli diretti in condizioni
+    normali. Qualunque altro processo figlio va segnalato per revisione.
+  condition: >
+    spawned_process
+    and (ollama_guard_process or ollama_process)
+    and (shell_procs or proc.name in (nc, ncat, curl, wget, socat, python3, perl, telnet))
+  output: >
+    Processo figlio sospetto da ollama-guard/ollama (program=%proc.name
+    parent=%proc.pname parent_cmdline=%proc.pcmdline command=%proc.cmdline
+    user=%user.name pid=%proc.pid)
+  priority: CRITICAL
+  tags: [ollama-guard, ollama, process, suspicious-child]
+
+- rule: Unexpected write to MCP ALE service files
+  desc: >
+    I file del servizio MCP ALE (codice, venv, script) sono statici in
+    produzione e non devono essere scritti a runtime dal processo stesso
+    (a parte cache Python __pycache__, esplicitamente esclusa) ne' da
+    processi non previsti durante un deploy controllato.
+  condition: >
+    open_write
+    and fd.name startswith /home/ale/agenti/mcp-ale
+    and not fd.name contains "__pycache__"
+    and not proc.name in (dpkg, apt, apt-get, rsync, cp, install, tee, sudo)
+  output: >
+    Modifica inattesa di un file del servizio MCP ALE (file=%fd.name
+    process=%proc.name parent_cmdline=%proc.pcmdline user=%user.name pid=%proc.pid)
+  priority: WARNING
+  tags: [mcp-ale, filesystem, integrity]
+
+- rule: Modification of MCP ALE or ollama-guard systemd unit
+  desc: >
+    Le unit systemd di MCP ALE e ollama-guard definiscono i privilegi e
+    l'avvio dei due watchdog/servizi di sicurezza. Una modifica inattesa
+    (fuori da una sessione amministrativa esplicita) e' un segnale di
+    escalation di privilegi o persistenza da parte di un attaccante.
+  condition: >
+    open_write
+    and (fd.name=/etc/systemd/system/mcp-ale.service
+         or fd.name=/etc/systemd/system/ollama-guard.service)
+  output: >
+    Modifica della unit systemd %fd.name (process=%proc.name
+    parent_cmdline=%proc.pcmdline user=%user.name pid=%proc.pid)
+  priority: CRITICAL
+  tags: [mcp-ale, ollama-guard, systemd, integrity]
