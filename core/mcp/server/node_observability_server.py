@@ -1,20 +1,26 @@
 """MCP server minimale, SOLO read-only, per il progetto ALE.
 
-Espone esattamente 3 tool, tutti di sola lettura:
-  - node_status:   hostname, uptime, load average, memoria libera
-  - ollama_status:  verifica healthy/unhealthy di Ollama via HTTP locale
-  - gpu_status:     temperatura/utilizzo/VRAM letti da nvidia-smi
+Espone esattamente 4 tool, tutti di sola lettura:
+  - node_status:         hostname, uptime, load average, memoria libera
+  - ollama_status:        verifica healthy/unhealthy di Ollama via HTTP locale
+  - gpu_status:           temperatura/utilizzo/VRAM letti da nvidia-smi
+  - ollama_guard_status:  legge (sola lettura) lo stato pubblicato da
+                          ollama-guard in /run/ollama-guard/status.json
 
 Regole non negoziabili (vedi core/mcp/README.md e AGENTS.md):
   - NESSUNA shell arbitraria: ogni comando esterno è fisso, a compile-time,
     senza input testuale proveniente dal chiamante MCP.
   - NESSUN tool generico tipo `execute_command`.
-  - NESSUNA scrittura sul filesystem.
+  - NESSUNA scrittura sul filesystem (inclusa la lettura di
+    /run/ollama-guard/status.json: mcp-ale non ha permesso di scrittura su
+    quel file, per costruzione dei permessi 0644 impostati da
+    ollama-guard).
   - NESSUN `sudo`: tutte le informazioni lette qui sono accessibili senza
-    privilegi elevati (letture di sistema, HTTP locale, nvidia-smi).
+    privilegi elevati (letture di sistema, HTTP locale, nvidia-smi, lettura
+    di un file world-readable).
   - Fail closed: se una lettura fallisce, il tool riporta lo stato di
-    errore/unhealthy, non solleva un'eccezione che nasconde il problema né
-    inventa un valore.
+    errore/unhealthy/unavailable/stale, non solleva un'eccezione che
+    nasconde il problema né inventa un valore.
 
 Usa l'SDK ufficiale MCP Python v2 (`mcp.server.mcpserver.MCPServer`), NON i
 vecchi esempi FastMCP v1.
@@ -22,10 +28,12 @@ vecchi esempi FastMCP v1.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import socket
 import subprocess
+import time
 from dataclasses import dataclass
 
 import httpx2
@@ -61,12 +69,30 @@ NVIDIA_SMI_ARGS = [
 ]
 NVIDIA_SMI_TIMEOUT_SECONDS = 5.0
 
+# Percorso fisso del file di stato pubblicato da ollama-guard (root), letto
+# QUI in sola lettura: mcp-ale non ha e non deve avere il permesso di
+# scrivere questo file (0644, proprietario root — vedi
+# core/safety/ollama-guard/src/status.rs e infra/systemd/ollama-guard.service).
+# Nessuna variabile d'ambiente/input esterno determina questo path: è fisso
+# a compile-time, coerente con la regola "niente comandi/percorsi costruiti
+# da testo esterno".
+OLLAMA_GUARD_STATUS_PATH = "/run/ollama-guard/status.json"
+
+# Se l'ultimo aggiornamento di status.json è più vecchio di questa soglia,
+# il watchdog potrebbe essere morto/bloccato: NON dobbiamo credere a uno
+# stato ottimistico ("WATCHING") solo perché è l'ultimo scritto. Deve
+# restare largamente sopra l'intervallo di GPU-check più lento
+# (gpu_check_interval_seconds, tipicamente 10s in ollama-guard.toml) per
+# non generare falsi "stale" per semplice jitter di scheduling.
+OLLAMA_GUARD_STALE_AFTER_SECONDS = 30.0
+
 mcp = MCPServer(
     name="ale-node-observability",
     title="ALE Node Observability (read-only)",
     instructions=(
         "Fornisce SOLO tool read-only per osservare lo stato di un nodo ALE: "
-        "node_status, ollama_status, gpu_status. Nessuna scrittura, nessuna "
+        "node_status, ollama_status, gpu_status, ollama_guard_status. "
+        "Nessuna scrittura, nessuna "
         "esecuzione di comandi arbitrari, nessun privilegio elevato."
     ),
 )
@@ -211,6 +237,94 @@ def gpu_status() -> dict:
         "memory_used_mib": stats.memory_used_mib,
         "memory_total_mib": stats.memory_total_mib,
         "power_draw_w": stats.power_draw_w,
+    }
+
+
+def _parse_ollama_guard_updated_at(updated_at: str) -> float:
+    """Converte il timestamp ISO-8601 di status.json in secondi epoch UTC.
+
+    Solleva `ValueError` se il formato non è quello atteso: il chiamante
+    deve trattarlo come "stato non valido", non far cadere il tool.
+    """
+    # ollama-guard scrive con `chrono::Utc::now().to_rfc3339()`, es.
+    # "2026-09-27T12:38:25.860290697+00:00". `datetime.fromisoformat` di
+    # Python 3.11+ gestisce sia l'offset "+00:00" sia i nanosecondi extra
+    # (troncando la precisione ai microsecondi), quindi non serve un parser
+    # scritto a mano.
+    import datetime
+
+    dt = datetime.datetime.fromisoformat(updated_at)
+    return dt.timestamp()
+
+
+@mcp.tool()
+def ollama_guard_status() -> dict:
+    """Legge SOLO in lettura lo stato pubblicato da ollama-guard.
+
+    Architettura:
+        ollama-guard (root) scrive /run/ollama-guard/status.json in modo
+        atomico (file temporaneo + rename) con permessi 0644: root può
+        scrivere, chiunque altro (incluso mcp-ale) può solo leggere.
+        Questo tool si limita a leggere quel file: NON usa sudo, NON
+        modifica il watchdog, NON riavvia servizi, NON esegue shell
+        arbitraria. Nessun percorso/comando esterno è costruito da input
+        del chiamante MCP: il path è fisso a compile-time.
+
+    Fail closed:
+        - file mancante (watchdog mai partito o RuntimeDirectory non
+          creato) -> {"status": "unavailable"};
+        - file presente ma con `updated_at` più vecchio della soglia di
+          staleness -> {"status": "stale"} (il cane potrebbe essere morto:
+          non ci fidiamo di uno stato ottimistico non aggiornato);
+        - file illeggibile/JSON malformato -> {"status": "error"}.
+    """
+    try:
+        with open(OLLAMA_GUARD_STATUS_PATH, "r", encoding="utf-8") as f:
+            raw = f.read()
+    except FileNotFoundError:
+        return {
+            "status": "unavailable",
+            "reason": f"{OLLAMA_GUARD_STATUS_PATH} non esiste (ollama-guard non è mai partito?)",
+        }
+    except OSError as e:
+        return {"status": "error", "reason": f"impossibile leggere {OLLAMA_GUARD_STATUS_PATH}: {e}"}
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as e:
+        return {"status": "error", "reason": f"JSON non valido in status.json: {e}"}
+
+    updated_at = payload.get("updated_at")
+    age_seconds: float | None = None
+    if isinstance(updated_at, str):
+        try:
+            age_seconds = time.time() - _parse_ollama_guard_updated_at(updated_at)
+        except ValueError as e:
+            return {"status": "error", "reason": f"updated_at non valido: {e}"}
+    else:
+        return {"status": "error", "reason": "campo updated_at mancante o non stringa"}
+
+    if age_seconds > OLLAMA_GUARD_STALE_AFTER_SECONDS:
+        return {
+            "status": "stale",
+            "reason": (
+                f"ultimo aggiornamento {age_seconds:.1f}s fa, "
+                f"oltre la soglia di {OLLAMA_GUARD_STALE_AFTER_SECONDS}s: "
+                "il watchdog potrebbe essere bloccato o morto"
+            ),
+            "age_seconds": round(age_seconds, 1),
+            "raw": payload,
+        }
+
+    return {
+        "status": "ok",
+        "age_seconds": round(age_seconds, 1),
+        "guard_state": payload.get("state"),
+        "ollama": payload.get("ollama"),
+        "gpu_temperature_c": payload.get("gpu_temperature_c"),
+        "restarts_10m": payload.get("restarts_10m"),
+        "last_error": payload.get("last_error"),
+        "updated_at": updated_at,
     }
 
 

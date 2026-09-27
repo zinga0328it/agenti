@@ -1,0 +1,47 @@
+# Configurazione di esempio per ollama-guard
+# Copiare come /etc/ollama-guard/ollama-guard.toml (o percorso a scelta) e adattare.
+
+[ollama]
+# URL base di Ollama. Deve restare su loopback: il watchdog non deve mai
+# dipendere da un endpoint raggiungibile dall'esterno.
+url = "http://127.0.0.1:11434"
+health_interval_seconds = 5
+health_timeout_seconds = 5
+max_health_failures = 3
+
+[restart]
+restart_window_seconds = 600
+max_restarts_per_window = 3
+# ARCHITETTURA (revisione 2026-09-27): ollama-guard non reimplementa più
+# l'escalation SIGTERM->SIGKILL in Rust. Quella responsabilità è delegata
+# all'unit systemd `ollama.service`, che va configurata con:
+#   TimeoutStopSec=10
+#   KillMode=control-group
+#   SendSIGKILL=yes
+#   Restart=on-failure
+# così un processo congelato/non responsivo viene comunque abbattuto da
+# systemd stesso entro un tempo breve e deterministico, senza che il
+# watchdog debba pilotare segnali manualmente.
+#
+# recovery_timeout_seconds: tempo massimo concesso, DOPO aver chiesto un
+# `systemctl restart`/`stop`, per verificare con polling reale (HTTP verso
+# /api/tags, o assenza di processi `ollama`) che l'azione abbia avuto
+# davvero l'effetto atteso. Non è un timeout sul comando systemctl in sé.
+recovery_timeout_seconds = 30
+
+[gpu]
+gpu_check_interval_seconds = 10
+gpu_warning_temperature = 80
+gpu_critical_temperature = 88
+# Temperatura sotto la quale è di nuovo consentito riavviare Ollama dopo uno
+# stop causato da CRITICAL.
+gpu_resume_temperature = 75
+
+[task_guard]
+max_task_seconds = 300
+max_actions_per_task = 50
+max_identical_actions = 3
+# Non richiesto esplicitamente ma usato dal Task Guard: numero massimo di
+# errori tollerati prima di far fallire il singolo task (Ollama non viene
+# toccato).
+max_errors_per_task = 5

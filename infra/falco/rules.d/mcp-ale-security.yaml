@@ -108,3 +108,48 @@
     parent_cmdline=%proc.pcmdline user=%user.name pid=%proc.pid)
   priority: CRITICAL
   tags: [mcp-ale, ollama-guard, systemd, integrity]
+
+- rule: Unexpected write to ollama-guard status file
+  desc: >
+    /run/ollama-guard/status.json e' l'unico canale di comunicazione tra
+    ollama-guard (root) e mcp-ale (utente non privilegiato, tool
+    ollama_guard_status): ollama-guard lo scrive in modo atomico
+    (tmpfile+rename), mcp-ale deve SOLO leggerlo (permessi 0644,
+    proprietario root, verificato che mcp-ale non possa scriverlo). Una
+    scrittura da un processo diverso da ollama-guard, e in particolare da
+    mcp-ale, e' una violazione del contratto di sicurezza e va segnalata
+    come CRITICAL a prescindere dal fatto che il kernel la neghi comunque
+    per permessi (il tentativo stesso e' il segnale di interesse).
+  condition: >
+    open_write
+    and fd.name=/run/ollama-guard/status.json
+    and not ollama_guard_process
+  output: >
+    Tentativo di scrittura su /run/ollama-guard/status.json da processo non
+    autorizzato (process=%proc.name parent_cmdline=%proc.pcmdline
+    user=%user.name pid=%proc.pid command=%proc.cmdline)
+  priority: CRITICAL
+  tags: [mcp-ale, ollama-guard, filesystem, integrity]
+
+- rule: Denied write attempt on ollama-guard status file
+  desc: >
+    Copre il caso, verificato realmente il 2026-09-27, in cui un processo
+    non autorizzato (es. mcp-ale) tenta la open() in scrittura su
+    /run/ollama-guard/status.json e il kernel la nega per permessi (0644,
+    proprietario root): la open() fallisce quindi non produce un fd valido
+    e la macro open_write di libs/Falco (che richiede fd.num>=0) non
+    matcha. Questa regola usa invece open_file_failed (fd.num=-1,
+    evt.res=EACCES/altro errno) per intercettare anche il SOLO TENTATIVO,
+    che e' comunque un segnale di interesse anche se il file resta intatto.
+  condition: >
+    open_file_failed
+    and fd.name=/run/ollama-guard/status.json
+    and evt.is_open_write=true
+    and not ollama_guard_process
+  output: >
+    Tentativo (negato dal kernel) di scrittura su
+    /run/ollama-guard/status.json da processo non autorizzato
+    (process=%proc.name parent_cmdline=%proc.pcmdline user=%user.name
+    pid=%proc.pid command=%proc.cmdline errno=%evt.res)
+  priority: CRITICAL
+  tags: [mcp-ale, ollama-guard, filesystem, integrity]

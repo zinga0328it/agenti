@@ -32,6 +32,7 @@ core/mcp/
 | `node_status`    | hostname, uptime, load average, memoria libera/totale (letture di sistema) |
 | `ollama_status`  | verifica `http://127.0.0.1:11434/api/tags`, ritorna healthy/unhealthy |
 | `gpu_status`     | temperatura, utilizzo, VRAM, power draw letti da `nvidia-smi`         |
+| `ollama_guard_status` | legge SOLO `/run/ollama-guard/status.json` (scritto da ollama-guard, root); `unavailable` se manca, `stale` se `updated_at` troppo vecchio (vedi `memoria/ARCHITETTURA.md`) |
 
 ### Regole non negoziabili (vedi anche `AGENTS.md`)
 
@@ -83,7 +84,7 @@ python client/test_client.py http://127.0.0.1:8811/mcp
 ```
 
 Il client si connette, esegue `initialize`, elenca i tool (`tools/list`),
-chiama i 3 tool e stampa il risultato JSON di ciascuno. Fallisce
+chiama i 4 tool e stampa il risultato JSON di ciascuno. Fallisce
 esplicitamente (`AssertionError`) se il server espone tool diversi da quelli
 attesi.
 

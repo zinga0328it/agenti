@@ -1,10 +1,14 @@
 [Unit]
 Description=MCP ALE - server read-only (node/ollama/gpu status) su Yggdrasil
-# Deve partire dopo rete, Yggdrasil (per avere ygg0 su) e driver NVIDIA
-# (per gpu_status via nvidia-smi) e dopo Ollama (per ollama_status). Solo
-# After=, mai Requires=/BindsTo=: il servizio MCP non deve dipendere dalla
-# salute di Ollama per avviarsi, deve solo poterla osservare quando è su.
-After=network-online.target yggdrasil.service nvidia-persistenced.service ollama.service
+# Deve partire dopo rete, Yggdrasil (per avere ygg0 su), driver NVIDIA
+# (per gpu_status via nvidia-smi), Ollama (per ollama_status) e
+# ollama-guard (per ollama_guard_status, che legge
+# /run/ollama-guard/status.json). Solo After=, mai Requires=/BindsTo=: il
+# servizio MCP non deve dipendere dalla salute/disponibilità di nessuno di
+# questi per avviarsi (se ollama-guard non è ancora partito, il tool
+# risponde semplicemente "unavailable", mai un errore fatale), deve solo
+# poterli osservare quando sono su.
+After=network-online.target yggdrasil.service nvidia-persistenced.service ollama.service ollama-guard.service
 Wants=network-online.target yggdrasil.service
 
 [Service]

@@ -82,6 +82,71 @@ modifiche operative al firewall vanno applicate con `systemctl restart
 nftables` (dopo backup, `nft -c -f` e rollback temporizzato), non con un
 `nft -f` diretto che bypasserebbe l'hook systemd di sincronizzazione.
 
+## Tool MCP `ollama_guard_status` — canale di stato ollama-guard → MCP
+
+`ollama-guard` (root) pubblica periodicamente il proprio stato interno in
+un file JSON leggibile da chiunque ma scrivibile solo da root:
+
+```
+ollama-guard (root, RuntimeDirectory=ollama-guard)
+    │  scrittura atomica (tmpfile + rename, permessi 0644)
+    ▼
+/run/ollama-guard/status.json
+    │  sola lettura (0644, proprietario root: mcp-ale NON ha permesso di
+    │  scrittura, né sulla directory /run/ollama-guard che è 0755 root)
+    ▼
+mcp-ale.service (utente non privilegiato)
+    │
+    ▼
+tool MCP `ollama_guard_status`
+```
+
+Contenuto del file (`core/safety/ollama-guard/src/status.rs`):
+
+```json
+{
+  "state": "WATCHING",
+  "ollama": "healthy",
+  "gpu_temperature_c": 42,
+  "restarts_10m": 0,
+  "last_error": null,
+  "updated_at": "2026-09-27T12:41:36.771572803+00:00"
+}
+```
+
+Stati ammessi per `state`: `WATCHING`, `THERMAL_HOLD`, `FAULT` (il `FAULT`
+è "sticky": una volta raggiunto non viene mai sovrascritto da una
+transizione di salute o termica; `THERMAL_HOLD` può tornare a `WATCHING`
+solo da sé stesso, mai da `FAULT`). La scrittura è sempre atomica: file
+temporaneo nella stessa directory (stesso filesystem, `/run` è tmpfs) poi
+`rename()`, mai una scrittura in-place che potrebbe lasciare un JSON a metà
+se letto in quel preciso istante.
+
+Il tool `ollama_guard_status` (in `core/mcp/server/node_observability_server.py`)
+è a sola lettura per costruzione: legge il file con `open(...)` in modalità
+`"r"`, non lo modifica mai, non ha e non ha bisogno di `sudo`. Gestisce tre
+casi non-`ok` in modo esplicito (fail closed, mai un'eccezione che nasconde
+lo stato reale):
+
+- file assente (es. ollama-guard non ancora partito, o mai partito):
+  `status: "unavailable"`;
+- `updated_at` più vecchio di `OLLAMA_GUARD_STALE_AFTER_SECONDS` (30s,
+  ampiamente sopra il ciclo GPU più lento, tipicamente 10s): il watchdog
+  potrebbe essere morto/bloccato, `status: "stale"` — non bisogna fidarsi
+  di un ultimo stato ottimistico se non viene più aggiornato;
+- JSON malformato/illeggibile: `status: "error"`.
+
+Verificato realmente (non solo per costruzione dei permessi) che l'utente
+`mcp-ale` non può scrivere `/run/ollama-guard/status.json`: un tentativo
+diretto (`sudo -n -u mcp-ale bash -c 'echo x >> ...'`) fallisce con
+"Permesso negato", sia a livello di shell sia a livello di regola Falco
+dedicata (`infra/falco/rules.d/mcp-ale-security.yaml`): una regola segnala
+CRITICAL qualunque scrittura riuscita al file da un processo diverso da
+`ollama-guard`, un'altra segnala CRITICAL anche il solo *tentativo negato*
+dal kernel (usando la macro Falco `open_file_failed`, perché una `open()`
+fallita per permessi non produce un file descriptor valido e la macro
+generica `open_write` di Falco non la intercetta).
+
 ## 3. Orchestratore ALE
 Ogni richiesta entra da un solo punto decisionale: **l'Agente Orchestratore**.
 

@@ -12,6 +12,7 @@ Esegui con:
 
 from __future__ import annotations
 
+import datetime
 import json
 import sys
 from pathlib import Path
@@ -23,9 +24,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from mcp import ClientSession  # noqa: E402
 from mcp.client._memory import InMemoryTransport  # noqa: E402
 
+import node_observability_server  # noqa: E402
 from node_observability_server import mcp as node_mcp  # noqa: E402
 
-EXPECTED_TOOLS = {"node_status", "ollama_status", "gpu_status"}
+EXPECTED_TOOLS = {"node_status", "ollama_status", "gpu_status", "ollama_guard_status"}
 
 
 @pytest.fixture
@@ -38,8 +40,8 @@ async def session():
 
 
 @pytest.mark.anyio
-async def test_tools_list_exposes_exactly_the_three_readonly_tools(session: ClientSession):
-    """Il server deve esporre SOLO i 3 tool read-only previsti, nient'altro.
+async def test_tools_list_exposes_exactly_the_four_readonly_tools(session: ClientSession):
+    """Il server deve esporre SOLO i 4 tool read-only previsti, nient'altro.
 
     Questo test è anche una guardia di sicurezza: se in futuro qualcuno
     aggiungesse per errore un tool tipo `execute_command` o una scrittura
@@ -95,3 +97,155 @@ async def test_no_write_or_arbitrary_execution_tool_is_ever_exposed(session: Cli
         lowered = tool.name.lower()
         for forbidden in forbidden_substrings:
             assert forbidden not in lowered, f"tool pericoloso trovato: {tool.name}"
+
+
+# ---------------------------------------------------------------------------
+# ollama_guard_status: legge SOLO /run/ollama-guard/status.json (mockato nei
+# test tramite monkeypatch della costante di modulo, mai un path reale).
+# ---------------------------------------------------------------------------
+
+
+def _write_status_json(path: Path, payload: dict) -> None:
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+@pytest.mark.anyio
+async def test_ollama_guard_status_unavailable_when_file_missing(
+    session: ClientSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    missing = tmp_path / "does-not-exist" / "status.json"
+    monkeypatch.setattr(node_observability_server, "OLLAMA_GUARD_STATUS_PATH", str(missing))
+
+    result = await session.call_tool("ollama_guard_status", arguments={})
+    assert not result.is_error
+    payload = json.loads(result.content[0].text)
+    assert payload["status"] == "unavailable"
+
+
+@pytest.mark.anyio
+async def test_ollama_guard_status_ok_when_fresh(
+    session: ClientSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    status_path = tmp_path / "status.json"
+    now = datetime.datetime.now(datetime.timezone.utc)
+    _write_status_json(
+        status_path,
+        {
+            "state": "WATCHING",
+            "ollama": "healthy",
+            "gpu_temperature_c": 41,
+            "restarts_10m": 0,
+            "last_error": None,
+            "updated_at": now.isoformat(),
+        },
+    )
+    monkeypatch.setattr(node_observability_server, "OLLAMA_GUARD_STATUS_PATH", str(status_path))
+
+    result = await session.call_tool("ollama_guard_status", arguments={})
+    assert not result.is_error
+    payload = json.loads(result.content[0].text)
+    assert payload["status"] == "ok"
+    assert payload["guard_state"] == "WATCHING"
+    assert payload["ollama"] == "healthy"
+    assert payload["gpu_temperature_c"] == 41
+    assert payload["restarts_10m"] == 0
+    assert payload["last_error"] is None
+    assert payload["age_seconds"] < 5.0
+
+
+@pytest.mark.anyio
+async def test_ollama_guard_status_stale_when_old(
+    session: ClientSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    status_path = tmp_path / "status.json"
+    old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=5)
+    _write_status_json(
+        status_path,
+        {
+            "state": "WATCHING",
+            "ollama": "healthy",
+            "gpu_temperature_c": 40,
+            "restarts_10m": 0,
+            "last_error": None,
+            "updated_at": old.isoformat(),
+        },
+    )
+    monkeypatch.setattr(node_observability_server, "OLLAMA_GUARD_STATUS_PATH", str(status_path))
+
+    result = await session.call_tool("ollama_guard_status", arguments={})
+    assert not result.is_error
+    payload = json.loads(result.content[0].text)
+    assert payload["status"] == "stale"
+    assert payload["age_seconds"] > node_observability_server.OLLAMA_GUARD_STALE_AFTER_SECONDS
+
+
+@pytest.mark.anyio
+async def test_ollama_guard_status_reports_fault_and_thermal_hold(
+    session: ClientSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    status_path = tmp_path / "status.json"
+    now = datetime.datetime.now(datetime.timezone.utc)
+    _write_status_json(
+        status_path,
+        {
+            "state": "FAULT",
+            "ollama": "unhealthy",
+            "gpu_temperature_c": 45,
+            "restarts_10m": 3,
+            "last_error": "raggiunto il limite di 3 restart in 600s",
+            "updated_at": now.isoformat(),
+        },
+    )
+    monkeypatch.setattr(node_observability_server, "OLLAMA_GUARD_STATUS_PATH", str(status_path))
+
+    result = await session.call_tool("ollama_guard_status", arguments={})
+    payload = json.loads(result.content[0].text)
+    assert payload["status"] == "ok"
+    assert payload["guard_state"] == "FAULT"
+    assert payload["restarts_10m"] == 3
+    assert "limite" in payload["last_error"]
+
+
+@pytest.mark.anyio
+async def test_ollama_guard_status_error_on_malformed_json(
+    session: ClientSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    status_path = tmp_path / "status.json"
+    status_path.write_text("{not valid json", encoding="utf-8")
+    monkeypatch.setattr(node_observability_server, "OLLAMA_GUARD_STATUS_PATH", str(status_path))
+
+    result = await session.call_tool("ollama_guard_status", arguments={})
+    assert not result.is_error
+    payload = json.loads(result.content[0].text)
+    assert payload["status"] == "error"
+
+
+@pytest.mark.anyio
+async def test_ollama_guard_status_never_writes_the_file(
+    session: ClientSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Guardia esplicita: il tool deve SOLO leggere. Verifichiamo che il
+    contenuto e il permesso del file non cambino mai dopo la chiamata.
+    """
+    status_path = tmp_path / "status.json"
+    now = datetime.datetime.now(datetime.timezone.utc)
+    original_payload = {
+        "state": "WATCHING",
+        "ollama": "healthy",
+        "gpu_temperature_c": 39,
+        "restarts_10m": 0,
+        "last_error": None,
+        "updated_at": now.isoformat(),
+    }
+    _write_status_json(status_path, original_payload)
+    status_path.chmod(0o644)
+    original_raw = status_path.read_text(encoding="utf-8")
+    original_mode = status_path.stat().st_mode
+
+    monkeypatch.setattr(node_observability_server, "OLLAMA_GUARD_STATUS_PATH", str(status_path))
+
+    await session.call_tool("ollama_guard_status", arguments={})
+    await session.call_tool("ollama_guard_status", arguments={})
+
+    assert status_path.read_text(encoding="utf-8") == original_raw
+    assert status_path.stat().st_mode == original_mode

@@ -1,0 +1,52 @@
+[Unit]
+Description=ollama-guard - independent watchdog for Ollama (health, GPU thermal, restart limiter)
+# Deve partire dopo che la rete è pronta e dopo che il driver NVIDIA è
+# disponibile (nvidia-persistenced è il servizio che garantisce che lo
+# stack NVIDIA sia inizializzato). Usiamo solo `After=`, non `Requires=`:
+# ollama-guard deve poter partire anche se uno di questi non è ancora up
+# (fail-open sull'avvio del watchdog stesso, che è la sua unica missione),
+# ma nella pratica l'ordinamento garantisce che parta dopo di loro.
+After=network-online.target nvidia-persistenced.service ollama.service
+Wants=network-online.target
+
+# Nessuna dipendenza da "Ollama sano" per avviarsi: il watchdog deve poter
+# partire e restare attivo anche se Ollama è già rotto, è proprio il suo
+# compito rilevarlo e correggerlo. Per questo NON usiamo BindsTo=/Requires=
+# su ollama.service: un ordinamento (After=) è sufficiente e corretto.
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/ale/agenti/ollama-guard
+ExecStart=/home/ale/agenti/ollama-guard/target/release/ollama-guard /home/ale/agenti/ollama-guard/ollama-guard.toml
+
+# RuntimeDirectory=ollama-guard fa creare a systemd /run/ollama-guard prima
+# di avviare il processo, di proprietà di root (User= sopra) con modalità
+# 0755: root può scrivere il file di stato dentro, chiunque altro (incluso
+# l'utente non privilegiato mcp-ale) può solo attraversare la directory e
+# leggere i file al suo interno, MAI scriverli/cancellarli (nessun bit di
+# scrittura per "altri" sulla directory). Il file status.json stesso viene
+# scritto con permessi 0644 dal binario (src/status.rs): sola lettura per
+# chiunque non sia root. systemd rimuove /run/ollama-guard allo stop del
+# servizio (comportamento standard di RuntimeDirectory=, coerente con la
+# natura "effimera" di /run).
+RuntimeDirectory=ollama-guard
+RuntimeDirectoryMode=0755
+Environment=OLLAMA_GUARD_STATUS_PATH=/run/ollama-guard/status.json
+
+Restart=always
+RestartSec=3
+
+# ollama-guard gira come root in produzione: il codice rileva l'UID
+# effettivo e NON usa mai sudo/pkexec in questo caso (vedi src/process.rs),
+# quindi non serve NoNewPrivileges=false né altre eccezioni particolari per
+# poter chiamare systemctl/nvidia-smi/pgrep.
+
+# Log su stdout/stderr, raccolti da journald (requisito esplicito: log
+# leggibili con `journalctl -u ollama-guard`).
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ollama-guard
+
+[Install]
+WantedBy=multi-user.target

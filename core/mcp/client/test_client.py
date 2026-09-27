@@ -1,7 +1,7 @@
 """Client MCP di test per il server `node_observability_server`.
 
 Si connette via Streamable HTTP, esegue initialize, elenca i tool
-disponibili, chiama i 3 tool esposti e stampa il risultato.
+disponibili, chiama i 4 tool esposti e stampa il risultato.
 
 Usa l'SDK ufficiale MCP Python v2 (`mcp.client.streamable_http`,
 `mcp.ClientSession`), coerente col server in server/node_observability_server.py.
@@ -20,7 +20,7 @@ from mcp.client.streamable_http import streamable_http_client
 
 DEFAULT_URL = "http://127.0.0.1:8811/mcp"
 
-EXPECTED_TOOLS = {"node_status", "ollama_status", "gpu_status"}
+EXPECTED_TOOLS = {"node_status", "ollama_status", "gpu_status", "ollama_guard_status"}
 
 
 async def run(url: str) -> None:
