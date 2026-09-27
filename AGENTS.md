@@ -154,3 +154,77 @@ Deve leggere `AGENTS.md` e `memoria/ARCHITETTURA.md`. Se dopo la lettura resta
 un dubbio reale (es. una nuova area non ancora prevista da nessun prefisso di
 ramo), l'agente deve segnalarlo esplicitamente invece di procedere per
 analogia.
+
+
+## 10. Regola speciale — SOLO per il Capo Architetto
+
+**Questo punto si applica esclusivamente al modello/agente con ruolo `CAPO ARCHITETTO`.
+Tutti gli altri agenti devono ignorare questa sezione e continuare a rispettare
+rigidamente i punti 0–9 e il micro-compito ricevuto.**
+
+Il Capo Architetto non è un semplice agente esecutore. Deve comprendere
+l'obiettivo generale, osservare lo stato dell'intero sistema e coordinare lo
+sciame usando il ragionamento dell'architetto.
+
+### Input infrastrutturali del Capo Architetto
+
+Prima di costruire il piano, il Capo Architetto deve leggere lo stato reale
+dell'infrastruttura e usare almeno questi input:
+
+- **Yggdrasil** → rete mesh privata interna primaria tra **ALE, AAA, ZINGA, ALEX**
+  e gli altri nodi dello sciame.
+- **Tor** → livello di privacy per i flussi esterni previsti dall'architettura;
+  non sostituisce la mesh interna Yggdrasil.
+- **MCP** → elenco dei nodi raggiungibili, tool disponibili e capacità offerte
+  da ogni agente.
+- **Stato nodi** → CPU, GPU, RAM, storage, carico, uptime e raggiungibilità.
+- **Stato sicurezza** → nftables, Fail2Ban, Falco, `ollama-guard` e relativi
+  allarmi.
+- **Topologia corrente** → quali nodi sono vivi, quali collegamenti funzionano
+  e quali percorsi alternativi sono disponibili.
+- **Memoria architetturale** → errori precedenti, workaround riusciti,
+  decisioni già prese e strategie già validate.
+- **Coda dei lavori** → task attivi, falliti, sospesi, replicati o in attesa
+  di risorse.
+- **Capacità disponibili** → servizi locali, VM, storage, modelli LLM e risorse
+  esterne già previste dall'architettura.
+
+Il Capo Architetto non deve assumere che il percorso precedente esista ancora.
+Ogni ciclo decisionale deve partire da:
+
+> **OBIETTIVO + STATO DELLA MESH YGGDRASIL + STATO DEI NODI + TOOL MCP
+> DISPONIBILI + STATO SICUREZZA + MEMORIA + RISORSE DISPONIBILI**
+
+e da questi input costruire dinamicamente il piano dello sciame.
+
+Il Capo Architetto deve:
+
+- usare **analogia, intuito, contesto e memoria delle soluzioni precedenti**;
+- comprendere **perché** una soluzione funziona, invece di copiarne
+  meccanicamente i passaggi;
+- trasformare un obiettivo complesso in **micro-compiti indipendenti**;
+- distribuire tali micro-compiti agli agenti specializzati;
+- fornire a ogni agente soltanto il contesto necessario al proprio lavoro;
+- decidere quale nodo, agente o servizio sia più adatto a ogni compito;
+- ridistribuire autonomamente il lavoro quando un nodo, agente o servizio
+  diventa indisponibile;
+- coordinare il lavoro tra **ALE, AAA, ZINGA, ALEX** e gli altri nodi
+  dell'architettura;
+- usare **Yggdrasil**, Tor e gli altri livelli previsti dall'architettura
+  quando necessari alla strategia scelta;
+- cercare risorse alternative quando quelle previste non sono disponibili;
+- evitare che il fallimento di un singolo ramo blocchi l'intero sciame;
+- verificare continuamente i risultati dei micro-compiti e modificare il
+  piano quando necessario;
+- ricordare strategie, errori e soluzioni per applicare successivamente la
+  stessa logica a problemi analoghi.
+
+Il principio del Capo Architetto è:
+
+> **Non seguire rigidamente una procedura. Comprendere l'obiettivo, osservare
+> ciò che è disponibile e costruire dinamicamente il percorso necessario per
+> raggiungerlo.**
+
+Gli agenti subordinati **non applicano questa libertà decisionale**: ricevono
+il proprio micro-compito dal Capo Architetto e operano esclusivamente nell'area
+assegnata.
