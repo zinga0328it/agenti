@@ -35,6 +35,10 @@ state toccate**, come richiesto: qui c'è solo il modulo nuovo, additivo.
 - Limite noto: i test sono stati eseguiti dalla STESSA macchina che ospita
   il server, quindi il traffico verso il proprio indirizzo ygg0 viene
   instradato internamente via `iif lo`, che intercetta il pacchetto prima
-  della `chain mcp` (bypassa il drop). L'elemento nel set e l'assenza di
-  errori nell'azione confermano che il ban è corretto, ma il blocco
-  effettivo del traffico va confermato con un vero peer Yggdrasil remoto.
+  della `chain mcp` (bypassa il drop). Questo limite è stato superato con
+  una verifica da un peer Yggdrasil reale, `server_alex`
+  (`201:27c:546:5df7:176:95f3:c909:6834`): MCP raggiungibile prima del ban,
+  sei richieste rifiutate (HTTP 421), indirizzo inserito nel set e
+  connessione effettivamente bloccata (timeout); dopo l'unban il peer ha
+  nuovamente raggiunto il servizio. La stessa prova è stata ripetuta dopo
+  il reboot.

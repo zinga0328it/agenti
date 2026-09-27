@@ -57,6 +57,31 @@ Il cliente entra sempre dal sito Servicess su ALEX. ALE non e il punto di ingres
 - Ospita orchestrazione, core verificato e domini dei clienti.
 - Ospita Apache/configurazioni, applicazioni e database dei clienti secondo isolamento definito sotto.
 
+## Servizi MCP ALE — rete e avvio
+
+Il server MCP read-only è eseguito dall'unità `mcp-ale.service` come utente
+non privilegiato dedicato. Ascolta sulla porta TCP 8811, bindata
+all'indirizzo IPv6 reale di `ygg0` risolto durante l'avvio; la policy
+nftables accetta questa porta esclusivamente con `iifname "ygg0"`.
+IPv4/LAN e altre interfacce non sono endpoint MCP consentiti.
+
+Ordine operativo al boot:
+
+1. rete disponibile;
+2. Yggdrasil crea `ygg0` e il suo IPv6;
+3. nftables carica il ruleset modulare, inclusi set statici Fail2Ban e la
+   chain MCP;
+4. Fail2Ban avvia le jail e riallinea i ban persistenti con nftables;
+5. Falco, Ollama e ollama-guard avviano i rispettivi controlli;
+6. MCP attende rete/Yggdrasil e l'indirizzo `ygg0`, quindi avvia il server.
+
+Il drop-in systemd di nftables accoda un riavvio non bloccante di Fail2Ban
+quando il ruleset viene riapplicato: `flush ruleset` elimina i set dinamici,
+perciò Fail2Ban deve ricrearli dal proprio database persistente. Le
+modifiche operative al firewall vanno applicate con `systemctl restart
+nftables` (dopo backup, `nft -c -f` e rollback temporizzato), non con un
+`nft -f` diretto che bypasserebbe l'hook systemd di sincronizzazione.
+
 ## 3. Orchestratore ALE
 Ogni richiesta entra da un solo punto decisionale: **l'Agente Orchestratore**.
 
