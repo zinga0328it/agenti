@@ -73,6 +73,9 @@ async def test_ollama_status_reports_healthy_or_unhealthy_never_raises(session: 
     assert not result.is_error
     payload = json.loads(result.content[0].text)
     assert payload["status"] in ("healthy", "unhealthy")
+    if payload["status"] == "healthy":
+        assert payload["capo_architetto_model"] == node_observability_server.CAPO_ARCHITETTO_MODEL
+        assert isinstance(payload["capo_architetto_available"], bool)
 
 
 @pytest.mark.anyio

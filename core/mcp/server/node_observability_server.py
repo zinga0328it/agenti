@@ -57,6 +57,13 @@ def _bracket_if_ipv6(host: str) -> str:
 OLLAMA_URL = "http://127.0.0.1:11434/api/tags"
 OLLAMA_TIMEOUT_SECONDS = 3.0
 
+# Modello designato come "Capo Architetto" dello sciame (vedi
+# memoria/ARCHITETTURA.md e /srv/qwen-base/README_AI_VIRUS.md): deve
+# essere servito dalla STESSA istanza Ollama systemd sorvegliata da
+# ollama-guard, mai da una seconda istanza avviata manualmente. Fisso a
+# compile-time, non configurabile da input esterno del chiamante MCP.
+CAPO_ARCHITETTO_MODEL = "qwen2.5-coder:14b-base"
+
 # Comando fisso, argomenti fissi, decisi a compile-time: nessun testo esterno
 # finisce negli argomenti di nvidia-smi (stessa regola già adottata in
 # core/safety/ollama-guard/src/gpu.rs).
@@ -167,12 +174,27 @@ async def ollama_status() -> dict:
     con timeout breve. Fail closed: qualunque errore (connessione rifiutata,
     timeout, stato HTTP non 2xx) viene riportato come "unhealthy", mai come
     eccezione non gestita.
+
+    Riporta anche esplicitamente se il modello "Capo Architetto"
+    (CAPO_ARCHITETTO_MODEL) risulta tra i modelli disponibili su questa
+    stessa istanza Ollama: non deve mai servire un'istanza diversa o
+    parallela, solo quella sorvegliata da ollama-guard.
     """
     try:
         async with httpx2.AsyncClient() as client:
             response = await client.get(OLLAMA_URL, timeout=OLLAMA_TIMEOUT_SECONDS)
         if response.status_code == 200:
-            return {"status": "healthy", "http_status": response.status_code}
+            available_models: list[str] = []
+            try:
+                available_models = [m.get("name", "") for m in response.json().get("models", [])]
+            except Exception:
+                available_models = []
+            return {
+                "status": "healthy",
+                "http_status": response.status_code,
+                "capo_architetto_model": CAPO_ARCHITETTO_MODEL,
+                "capo_architetto_available": CAPO_ARCHITETTO_MODEL in available_models,
+            }
         return {
             "status": "unhealthy",
             "http_status": response.status_code,

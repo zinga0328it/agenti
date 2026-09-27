@@ -147,8 +147,116 @@ dal kernel (usando la macro Falco `open_file_failed`, perché una `open()`
 fallita per permessi non produce un file descriptor valido e la macro
 generica `open_write` di Falco non la intercetta).
 
+## Capo Architetto — `qwen2.5-coder:14b-base`
+
+Il modello designato come "Capo Architetto" dello sciame (visione completa
+in `/srv/qwen-base/README_AI_VIRUS.md`) è **`qwen2.5-coder:14b-base`**:
+
+```
+qwen2.5-coder:14b-base
+        ↓
+CAPO ARCHITETTO (riceve un obiettivo, sceglie una ACTION esistente)
+        ↓
+MCP ALE
+        ↓
+sciame
+        ↓
+AAA / ZINGA / ALEX
+```
+
+Il Capo Architetto **non programma né esegue shell direttamente**: sceglie
+un'azione già prevista e compila gli argomenti, il core Rust dello sciame
+controlla se l'azione è autorizzata prima di eseguirla (regola già
+stabilita: "LLM = decide, Rust = controlla").
+
+### Incidente (2026-09-26/27) e correzione
+
+Il modello era stato inizialmente scaricato e provato con una **seconda
+istanza Ollama avviata manualmente**:
+
+```
+nohup env OLLAMA_MODELS=/srv/qwen-base/models OLLAMA_HOST=127.0.0.1:11434 ollama serve &
+```
+
+Due problemi reali, entrambi confermati durante l'analisi:
+
+1. **Stessa porta** (`127.0.0.1:11434`) della singola istanza `ollama.service`
+   già sorvegliata da `ollama-guard`: architetturalmente sbagliato, e in
+   pratica una seconda istanza in ascolto sulla stessa porta non può
+   coesistere in modo affidabile con la prima.
+2. **Competizione per la GPU**: la prima volta il modello si caricava
+   correttamente (`offloaded 49/49 layers to GPU`), ma dopo il secondo
+   caricamento (con l'altra istanza/modello già a occupare VRAM) Ollama non
+   trovava più memoria GPU sufficiente e ripiegava sulla CPU
+   (`layers.offload=0`, 100% CPU) — esattamente il sintomo segnalato.
+
+**Correzione applicata**: nessuna seconda istanza Ollama. Il modello è stato
+importato nello store standard dell'unica istanza sorvegliata da
+`ollama-guard`:
+
+```
+sudo cp /srv/qwen-base/models/blobs/sha256-*        /usr/share/ollama/.ollama/models/blobs/
+sudo cp /srv/qwen-base/models/manifests/registry.ollama.ai/library/qwen2.5-coder/14b-base \
+        /usr/share/ollama/.ollama/models/manifests/registry.ollama.ai/library/qwen2.5-coder/14b-base
+sudo chown -R ollama:ollama /usr/share/ollama/.ollama/models/blobs/sha256-8000ab37... /usr/share/ollama/.ollama/models/manifests/registry.ollama.ai/library/qwen2.5-coder
+sudo systemctl restart ollama
+```
+
+I blob sono identificati per hash SHA-256 (storage content-addressable di
+Ollama): due dei quattro blob (template e license) erano già presenti,
+condivisi con altri modelli Qwen2 già installati, senza bisogno di
+duplicarli.
+
+**Verificato realmente, dopo la correzione:**
+- `curl http://127.0.0.1:11434/api/tags` elenca `qwen2.5-coder:14b-base`
+  insieme agli altri modelli, su un'unica istanza (`ss -ltnp | grep 11434`
+  mostra un solo processo in ascolto);
+- una `generate` reale produce nei log di `ollama.service`:
+  `llm_load_tensors: offloaded 49/49 layers to GPU`, con `nvidia-smi` che
+  mostra ~11 GiB di VRAM occupata durante l'inferenza;
+- un test di recovery reale (`systemctl stop ollama` mentre `ollama-guard`
+  era attivo) ha mostrato il ciclo atteso: 1/3 → 2/3 fallimenti di health
+  check, poi il restart automatico, `restarts_10m` incrementato a 1 in
+  `/run/ollama-guard/status.json`, Ollama di nuovo `healthy` in circa 15
+  secondi — e il modello, ricaricato su richiesta dopo il riavvio, di nuovo
+  con `offloaded 49/49 layers to GPU` (nessuna dipendenza persa dal
+  riavvio: il modello vive nello store, non nel processo).
+
+`ollama-guard` non ha richiesto modifiche di codice: il suo health check è
+volutamente agnostico rispetto al modello caricato (osserva solo se
+l'endpoint HTTP `/api/tags` risponde), quindi sorveglia correttamente
+qualunque modello serva l'istanza, incluso il Capo Architetto.
+
+Il tool MCP `ollama_status` (`core/mcp/server/node_observability_server.py`)
+è stato esteso per riportare esplicitamente il Capo Architetto configurato
+e se risulta disponibile sull'istanza osservata:
+
+```json
+{
+  "status": "healthy",
+  "http_status": 200,
+  "capo_architetto_model": "qwen2.5-coder:14b-base",
+  "capo_architetto_available": true
+}
+```
+
+`/srv/qwen-base` resta come copia sorgente/archivio del modello (blob +
+manifest originali), ma il suo README è stato aggiornato per vietare
+esplicitamente il riavvio manuale via `nohup`: quella procedura è la causa
+diretta dell'incidente e non deve più essere usata.
+
+**Nota di scope**: l'MCP server attuale resta un server di *osservazione*
+(node/ollama/gpu/ollama-guard status, tutto read-only). Il livello
+"orchestratore" che userà realmente il Capo Architetto per scegliere ACTION
+e parlare con lo sciame (MCP scritto in Rust, tool per nodo, "DNA Virus")
+è la fase successiva descritta in `/srv/qwen-base/README_AI_VIRUS.md` e non
+è stato implementato in questo intervento: qui è stato corretto solo il
+problema tecnico reale (doppia istanza Ollama / GPU) e reso il modello
+osservabile da MCP.
+
 ## 3. Orchestratore ALE
 Ogni richiesta entra da un solo punto decisionale: **l'Agente Orchestratore**.
+
 
 ```text
 richiesta validata
