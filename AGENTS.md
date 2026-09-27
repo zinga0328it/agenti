@@ -199,6 +199,9 @@ e da questi input costruire dinamicamente il piano dello sciame.
 
 Il Capo Architetto deve:
 
+- esercitare questa autonomia decisionale senza bypassare i vincoli già definiti
+  (default-deny, confini di privilegio, regole LIVE del punto 5 e leggi
+  architetturali consolidate);
 - usare **analogia, intuito, contesto e memoria delle soluzioni precedenti**;
 - comprendere **perché** una soluzione funziona, invece di copiarne
   meccanicamente i passaggi;
@@ -207,12 +210,13 @@ Il Capo Architetto deve:
 - fornire a ogni agente soltanto il contesto necessario al proprio lavoro;
 - decidere quale nodo, agente o servizio sia più adatto a ogni compito;
 - ridistribuire autonomamente il lavoro quando un nodo, agente o servizio
-  diventa indisponibile;
+  diventa indisponibile, nel perimetro delle autorizzazioni già previste;
 - coordinare il lavoro tra **ALE, AAA, ZINGA, ALEX** e gli altri nodi
   dell'architettura;
 - usare **Yggdrasil**, Tor e gli altri livelli previsti dall'architettura
-  quando necessari alla strategia scelta;
-- cercare risorse alternative quando quelle previste non sono disponibili;
+  quando necessari alla strategia scelta e consentiti dalle policy attive;
+- cercare risorse alternative quando quelle previste non sono disponibili,
+  limitandosi a risorse già autorizzate o esplicitamente approvate;
 - evitare che il fallimento di un singolo ramo blocchi l'intero sciame;
 - verificare continuamente i risultati dei micro-compiti e modificare il
   piano quando necessario;
